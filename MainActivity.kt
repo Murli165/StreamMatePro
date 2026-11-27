@@ -1,9 +1,9 @@
 package com.streammate.pro
-
 import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -77,7 +77,10 @@ class MainActivity : ComponentActivity() {
         enterPipIfPossible()
     }
 
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         inPipState.value = isInPictureInPictureMode
     }
@@ -133,9 +136,11 @@ fun StreamMateTvApp(
         )
     }
 
-    var channels by remember { mutableStateOf<List<Channel>>(emptyList()) }
-    var epgMap by remember { mutableStateOf>(emptyMap()) }
-    var favoriteIds by remember { mutableStateOf(prefs.getStringSet("favs", emptySet()) ?: emptySet()) }
+    var channels by remember { mutableStateOf(emptyList<Channel>()) }
+    var epgMap by remember { mutableStateOf(emptyMap<String, String>()) }
+    var favoriteIds by remember {
+        mutableStateOf(prefs.getStringSet("favs", emptySet())?.toSet() ?: emptySet())
+    }
     var recentIds by remember { mutableStateOf(loadRecentIds(prefs)) }
     var focusedChannel by remember { mutableStateOf<Channel?>(null) }
     var playingChannel by remember { mutableStateOf<Channel?>(null) }
@@ -176,21 +181,33 @@ fun StreamMateTvApp(
             for (src in sourceList) {
                 when (src.type) {
                     "M3U" -> allLoaded.addAll(fetchAndParseM3U(src.url, ua))
-                    "XTREAM" -> allLoaded.addAll(fetchXtreamApi(src.url, src.username, src.password, ua))
-                    "STALKER" -> allLoaded.addAll(fetchStalkerApi(src.url, src.mac, src.sn, src.deviceId1, src.deviceId2, ua))
+                    "XTREAM" -> allLoaded.addAll(
+                        fetchXtreamApi(src.url, src.username, src.password, ua)
+                    )
+                    "STALKER" -> allLoaded.addAll(
+                        fetchStalkerApi(src.url, src.mac, src.sn, src.deviceId1, src.deviceId2, ua)
+                    )
                 }
             }
             channels = allLoaded.distinctBy { it.url }
-            if (focusedChannel == null && channels.isNotEmpty()) focusedChannel = channels.first()
+            if (focusedChannel == null && channels.isNotEmpty()) {
+                focusedChannel = channels.first()
+            }
             if (activeSettings.epgUrl.isNotBlank()) {
                 epgMap = fetchEpgMap(activeSettings.epgUrl, ua)
             }
-            statusMsg = if (channels.isEmpty()) "0 channels found. Check URL/UA." else "${channels.size} items loaded"
+            statusMsg = if (channels.isEmpty()) {
+                "0 channels found. Check URL/UA."
+            } else {
+                "${channels.size} items loaded"
+            }
             isLoading = false
         }
     }
 
-    LaunchedEffect(Unit) { if (sources.isNotEmpty()) refreshAll(sources) }
+    LaunchedEffect(Unit) {
+        if (sources.isNotEmpty()) refreshAll(sources)
+    }
 
     fun toggleFav(ch: Channel) {
         val upd = favoriteIds.toMutableSet()
@@ -209,8 +226,7 @@ fun StreamMateTvApp(
 
     fun getEpgFor(ch: Channel?): String {
         if (ch == null) return ""
-        return epgMap[ch.tvgId]?.value ?: epgMap[ch.name]?.value ?: ""
-        
+        return epgMap[ch.tvgId] ?: epgMap[ch.name] ?: ""
     }
 
     if (playingChannel != null) {
@@ -240,8 +256,12 @@ fun StreamMateTvApp(
 
     val mediaFiltered = remember(channels, activeMenu) {
         when (activeMenu) {
-            "Movies" -> channels.filter { it.mediaType == "MOVIE" || it.group.contains("movie", true) }
-            "Series" -> channels.filter { it.mediaType == "SERIES" || it.group.contains("series", true) }
+            "Movies" -> channels.filter {
+                it.mediaType == "MOVIE" || it.group.contains("movie", ignoreCase = true)
+            }
+            "Series" -> channels.filter {
+                it.mediaType == "SERIES" || it.group.contains("series", ignoreCase = true)
+            }
             else -> channels.filter { it.mediaType == "LIVE" }
         }
     }
@@ -250,11 +270,219 @@ fun StreamMateTvApp(
         listOf("Favorites", "All channels") + mediaFiltered.map { it.group }.distinct().sorted()
     }
 
-    val displayedChannels = remember(channels, mediaFiltered, activeMenu, selectedCategory, searchQuery, favoriteIds) {
+    val displayedChannels = remember(
+        channels,
+        mediaFiltered,
+        activeMenu,
+        selectedCategory,
+        searchQuery,
+        favoriteIds
+    ) {
         when (activeMenu) {
-            "Search" -> if (searchQuery.isBlank()) channels.take(50) else channels.filter { it.name.contains(searchQuery, true) || it.group.contains(searchQuery, true) }
+            "Search" -> if (searchQuery.isBlank()) {
+                channels.take(50)
+            } else {
+                channels.filter {
+                    it.name.contains(searchQuery, ignoreCase = true) ||
+                        it.group.contains(searchQuery, ignoreCase = true)
+                }
+            }
             "My list" -> channels.filter { favoriteIds.contains(it.id) }
             else -> when (selectedCategory) {
+                "Favorites" -> mediaFiltered.filter { favoriteIds.contains(it.id) }
+                "All channels" -> mediaFiltered
+                else -> mediaFiltered.filter { it.group == selectedCategory }
+            }
+        }
+    }
+
+    val clockPattern = if (uiPrefs.clock24h) "EEE, dd MMM, HH:mm" else "EEE, dd MMM, h:mm a"
+    val nowTime = remember(uiPrefs.clock24h) {
+        SimpleDateFormat(clockPattern, Locale.getDefault()).format(Date())
+    }
+    val ua = remember(settings) { resolveUserAgent(settings) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgBlack)
+            .statusBarsPadding()
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            // 1. LEFT SIDEBAR
+            Column(
+                modifier = Modifier
+                    .width(136.dp)
+                    .fillMaxHeight()
+                    .background(SidebarBg)
+                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "StreamMate",
+                        color = accentColor,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 12.dp)
+                    )
+                    SidebarNavItem(Icons.Default.Search, "Search", activeMenu == "Search", accentColor) {
+                        activeMenu = "Search"
+                    }
+                    SidebarNavItem(Icons.Default.Tv, "TV", activeMenu == "TV", accentColor) {
+                        activeMenu = "TV"
+                        selectedCategory = "All channels"
+                    }
+                    SidebarNavItem(Icons.Default.Movie, "Movies", activeMenu == "Movies", accentColor) {
+                        activeMenu = "Movies"
+                        selectedCategory = "All channels"
+                    }
+                    SidebarNavItem(Icons.Default.VideoLibrary, "Series", activeMenu == "Series", accentColor) {
+                        activeMenu = "Series"
+                        selectedCategory = "All channels"
+                    }
+                    SidebarNavItem(Icons.Default.FiberManualRecord, "Recordings", activeMenu == "Recordings", accentColor) {
+                        activeMenu = "Recordings"
+                    }
+                    SidebarNavItem(Icons.Default.BookmarkBorder, "My list", activeMenu == "My list", accentColor) {
+                        activeMenu = "My list"
+                    }
+                }
+                SidebarNavItem(Icons.Default.Settings, "Settings", showSettingsDrawer, accentColor) {
+                    showSettingsDrawer = true
+                }
+            }
+
+            // 2. MIDDLE CATEGORIES COLUMN
+            if (activeMenu == "TV" || activeMenu == "Movies" || activeMenu == "Series") {
+                LazyColumn(
+                    modifier = Modifier
+                        .width(142.dp)
+                        .fillMaxHeight()
+                        .background(Color(0xFF0E1117))
+                        .padding(vertical = 10.dp, horizontal = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(categories) { cat ->
+                        val active = cat == selectedCategory
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (active) CardElevated else Color.Transparent)
+                                .clickable { selectedCategory = cat }
+                                .padding(horizontal = 10.dp, vertical = 9.dp)
+                        ) {
+                            Text(
+                                text = cat,
+                                color = if (active) Color.White else TextSecondary,
+                                fontSize = itemFontSp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 3. RIGHT MAIN AREA
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(10.dp)
+            ) {
+                if (activeMenu == "Recordings") {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "DVR Recordings are saved in:\nMovies/StreamMatePro/",
+                            color = TextSecondary,
+                            fontSize = 14.sp
+                        )
+                    }
+                } else {
+                    if (activeMenu == "Search") {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = {
+                                Text(
+                                    "Search channels, movies, series...",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(96.dp)
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(166.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.Black)
+                                    .clickable { focusedChannel?.let { playFullscreen(it) } },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (focusedChannel != null && !showSettingsDrawer) {
+                                    MiniPreviewPlayer(focusedChannel!!.url, ua, Modifier.fillMaxSize())
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .background(Color(0x99000000))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Tap Fullscreen", color = Color.White, fontSize = 9.sp)
+                                    }
+                                } else {
+                                    Text("Preview", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = focusedChannel?.name ?: "Select a channel",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = getEpgFor(focusedChannel).ifBlank {
+                                        statusMsg.ifBlank { "1st tap: Preview • 2nd tap: Fullscreen" }
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "$nowTime  •  ${focusedChannel?.group ?: selectedCategory}",
+                                    color = accentColor,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+
+                    if (isLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = accentColor)
+                        }
+                    } else if (disp  else -> when (selectedCategory) {
                 "Favorites" -> mediaFiltered.filter { favoriteIds.contains(it.id) }
                 "All channels" -> mediaFiltered
                 else -> mediaFiltered.filter { it.group == selectedCategory }
