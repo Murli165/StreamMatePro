@@ -209,7 +209,8 @@ fun StreamMateTvApp(
 
     fun getEpgFor(ch: Channel?): String {
         if (ch == null) return ""
-        return epgMap[ch.tvgId] ?: epgMap[ch.name] ?: ""
+        return epgMap[ch.tvgId]?.value ?: epgMap[ch.name]?.value ?: ""
+        
     }
 
     if (playingChannel != null) {
