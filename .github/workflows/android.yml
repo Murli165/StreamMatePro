@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Unzip src folder
-        run: unzip -o src.zip
+        run: unzip -o src.zip && rm -rf src/main/java/com/streammate/pro/* && cp -f *.kt src/main/java/com/streammate/pro/
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
